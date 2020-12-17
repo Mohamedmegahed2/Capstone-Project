@@ -1,0 +1,244 @@
+---
+title: "Capstone Project"
+author: "Mohamed Megahed"
+date: "December 10, 2020"
+---
+
+```{r}
+library(class)
+library(caret)
+library(ISLR)
+library(dummies)
+library(dplyr)
+library(ggvis)
+library(ggplot2)
+library(e1071)
+library(tidyquant)
+library(tidyverse)
+library(cowplot)
+library(Hmisc)
+library(WVPlots)
+```
+
+**Dateset from Allaint Treatment Cenetr**
+
+***Data Importing and Preprocessing***
+```{r}
+Alliant <- read.csv("ClaimsScreen.csv")
+head((Alliant))
+
+# deleting unnecessary columns
+A <- Alliant[,-c(3,5,9,13,14,16,17)]
+
+```
+
+** checking if there is any missing data**
+```{r, fig.height=7, fig.width=15}
+library(Amelia)
+missmap(A, main = "Missing values vs observed")
+```
+** There is no misssing data**
+
+### Total number of claims per Render Provider
+```{r}
+r <- summarise(group_by(A, Rendering.Provider), Claims=n_distinct(Claim.ID))
+d <- mutate(r, percent = (Claims / sum(Claims))*100)
+
+```
+
+### Total cahrges per Render Provider
+```{r}
+RP <- summarise(group_by(A, Rendering.Provider), TotalCharges = sum(Charges))
+RP
+
+both <- cbind(d,RP$TotalCharges)
+both
+```
+
+## Total number of claims per Payer
+```{r, fig.height=5, fig.width=14}
+Payer_Cliams <- summarise(group_by(A, Payer.Name), Claims=n_distinct(Claim.ID))
+Payer_Percent <- mutate(Payer_Cliams, percent = (Claims / sum(Claims))*100)
+
+ggplot(Payer_Cliams, aes(as.factor(Payer.Name), Claims)) + 
+    geom_point(color = "red") + 
+    labs(y = "Claims", x = "Payer")
+```
+
+## Paid and Outstanding Claims
+```{r}
+Payer_Remits <- summarise(group_by(A, Payer.Name), Totalpayments = sum(Remit.Amount))
+Payer_R_Percent <- mutate(Payer_Remits, percent = (Totalpayments / sum(Totalpayments))*100)
+Payer_Remits
+Payer_R_Percent
+Claim_Status <- summarise(group_by(A, Status), Claims=n_distinct(Claim.ID))
+Claim_Status
+```
+
+## correlation analysis between variables
+```{r, fig.height=6, fig.width=13}
+ggplot(A, aes(Trans.Date, Status)) + 
+  geom_jitter(color = "green", alpha = 2) +
+  theme_light()
+
+ggplot(A, aes(Status, Payer.Name)) + 
+  geom_jitter(color = "red", alpha = 2) +
+  theme_light()
+
+A %>% 
+   ggplot(aes(region,Charges,fill=sex))+geom_boxplot()+facet_grid()+
+   ggtitle("Outlier Charges") + ylim(0,450)
+scale_fill_manual(values=c("whitesmoke","steelblue")) 
+```
+
+```{r}
+x <- ggplot(A, aes(smoker, Charges)) +
+  geom_jitter(aes(color = smoker), alpha = 0.7) + ylim(0,450) +
+  theme_light()
+
+y <- ggplot(A, aes(region, Charges)) +
+  geom_jitter(aes(color = region), alpha = 0.7) + ylim(0,450) +
+  theme_light()
+
+p <- plot_grid(x, y) 
+title <- ggdraw() + draw_label("Correlation between Charges and Smoker / Region", fontface='bold')
+plot_grid(title, p, ncol=1, rel_heights=c(0.1, 1))
+```
+
+## Linear Regression Model
+*** Data Splitting ***
+
+```{r prep, message=FALSE, warning=FALSE, paged.print=TRUE}
+n_train <- round(0.8 * nrow(A))
+train_indices <- sample(1:nrow(A), n_train)
+Data_train <- A[train_indices, ]
+Data_test <- A[-train_indices, ]
+
+Formula <- as.formula("Charges ~ age + sex + bmi + children + smoker + region")
+```
+
+1. Divide the data into 60% training and 40% validation
+```{r}
+### Train and Test the Model
+model_0 <- lm(Formula, data = Data_train)
+summary(model_0)
+#Saving R-squared
+r_sq_0 <- summary(model_0)$r.squared
+
+#predict data on test set
+prediction_0 <- predict(model_0, newdata = Data_test)
+#calculating the residuals
+residuals_0 <- Data_test$charges - prediction_0
+#calculating Root Mean Squared Error
+rmse_0 <- sqrt(mean(residuals_0^2))
+```
+### Train and Test New Model
+```{r model_1, message=FALSE, warning=FALSE, paged.print=TRUE}
+formula_1 <- as.formula("Charges ~ age + bmi + children + smoker + region")
+
+model_1 <- lm(formula_1, data = Data_train)
+summary(model_1)
+r_sq_1 <- summary(model_1)$r.squared
+
+prediction_1 <- predict(model_1, newdata = Data_test)
+
+residuals_1 <- Data_test$charges - prediction_1
+rmse_1 <- sqrt(mean(residuals_1^2))
+```
+
+
+### Compare the models
+```{r comparison, message=FALSE, warning=FALSE, paged.print=TRUE}
+print(paste0("R-squared for first model:", round(r_sq_0, 4)))
+print(paste0("R-squared for new model: ", round(r_sq_1, 4)))
+print(paste0("RMSE for first model: ", round(rmse_0, 2)))
+print(paste0("RMSE for new model: ", round(rmse_1, 2)))
+```
+
+As we can see, performance is quite similar between two models so I will keep the new model since it's a little bit simpler.
+
+### Model Performance
+```{r performance, message=FALSE, warning=FALSE, paged.print=TRUE}
+Data_test$prediction <- predict(model_1, newdata = Data_test)
+ggplot(Data_test, aes(x = prediction, y = Charges)) + 
+  geom_point(color = "blue", alpha = 0.7) + 
+  geom_abline(color = "red") +
+  ggtitle("Prediction vs. Real values")
+
+Data_test$residuals <- Data_test$Charges - Data_test$prediction
+
+ggplot(data = Data_test, aes(x = prediction, y = residuals)) +
+  geom_pointrange(aes(ymin = 0, ymax = residuals), color = "red", alpha = 0.7) +
+  geom_hline(yintercept = 0, linetype = 3, color = "green") +
+  ggtitle("Residuals vs. Linear model prediction")
+
+ggplot(Data_test, aes(x = residuals)) + 
+  geom_histogram(bins = 15, fill = "darkblue") +
+  ggtitle("Histogram of residuals")
+
+GainCurvePlot(Data_test, "prediction", "Charges", "Model")
+```
+
+We can see the errors in the model are close to zero so model predicts quite well.
+
+
+### Building Machine Learning Models
+```{r}
+#Divide the dataset into a training and validation set for some machine learning predictions
+A_data <- A[,c(8,11,12,13,14,15,16)]
+ trainds<-createDataPartition(A_data$Charges,p=0.8,list=F)
+ validate<-A_data[-trainds,] 
+ trainds<-A_data[trainds,]  
+#Set metric and control
+ control<-trainControl(method="cv",number=10)
+ metric<-"RMSE" 
+ #Set up models 
+ set.seed(233)
+ fit.knn<-train(Charges~.,data=trainds,method="knn",trControl=control,metric=metric) 
+ set.seed(233)
+ fit.svm<-train(Charges~.,data=trainds,method="svmRadial",trControl=control,metric=metric) 
+ set.seed(233)
+ fit.gbm<-train(Charges~.,data=trainds,method="gbm",trControl=control,metric=metric,
+               verbose=F) 
+ set.seed(233)
+ fit.xgb<-train(Charges~.,data=trainds,method="xgbTree",trControl=control,metric=metric,
+               verbose=F) 
+set.seed(233) 
+fit.rf<-train(Charges~.,data=trainds,method="xgbTree",trControl=control,metric=metric,
+               verbose=F) 
+results<-resamples(list(knn=fit.knn,svm=fit.svm,xgb=fit.xgb,gbm=fit.gbm,rf=fit.rf))
+
+```
+
+```{r}
+#Visualize model "Accuracies"
+##Gradient Boosting: Model Details
+getTrainPerf(fit.gbm) 
+
+#XGBoost model details
+getTrainPerf(fit.xgb) 
+
+#Support Vector Machine Model Details
+getTrainPerf(fit.svm)
+
+#RandomForest Model Details and Feature Importance
+getTrainPerf(fit.rf) 
+
+plot(varImp(fit.rf),main="Model Feature Importance-Random Forest") 
+```
+
+
+```{r}
+#Choose the GBM  model
+ predicted<-predict(fit.gbm,validate)
+plot(fit.gbm,main="GBM") 
+
+```
+
+```{r}
+library(Metrics)
+test_perf<-rmse(validate$Charges,predicted) 
+paste0("RSE is ",rse(validate$charges,predicted))
+paste0("RMSE is ",test_perf)
+```
+
